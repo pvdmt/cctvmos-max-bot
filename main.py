@@ -22,7 +22,7 @@ app = Flask(__name__)
 
 
 # ============================================================
-# ХРАНИЛИЩЕ (простое, в файле)
+# ХРАНИЛИЩЕ
 # ============================================================
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -49,7 +49,7 @@ def api_request(method, path, params=None, body=None):
     if not BOT_TOKEN:
         print('NO TOKEN')
         return None
-    url = f'{API}{path}'
+    url = API + path
     headers = {
         'Authorization': BOT_TOKEN,
         'Content-Type': 'application/json',
@@ -64,11 +64,11 @@ def api_request(method, path, params=None, body=None):
         else:
             return None
         if r.status_code >= 400:
-            print(f'API {method} {path} -> {r.status_code}: {r.text[:200]}')
+            print('API ' + method + ' ' + path + ' -> ' + str(r.status_code) + ': ' + r.text[:200])
             return None
         return r.json()
     except Exception as e:
-        print(f'API ERROR {path}:', e)
+        print('API ERROR ' + path + ': ' + str(e))
         return None
 
 
@@ -80,15 +80,16 @@ def send_message(user_id, text, keyboard=None):
 
 
 def answer_callback(callback_id, notification=''):
+    if not callback_id:
+        return None
     return api_request('POST', '/answers', params={'callback_id': callback_id},
                        body={'notification': notification})
 
 
 def make_keyboard(rows):
-    """rows: [[{'text':'...','payload':'...','type':'callback'}, ...], ...]"""
     buttons = []
     for row in rows:
-        buttons.append([{**btn} for btn in row])
+        buttons.append([{**b} for b in row])
     return {
         'type': 'inline_keyboard',
         'payload': {'buttons': buttons}
@@ -105,8 +106,8 @@ def btn(text, payload=None, url=None, type_='callback'):
 
 
 # ============================================================
-// FAQ
-// ============================================================
+# FAQ
+# ============================================================
 AUTO_REPLIES = [
     {'id': 'about', 'p': 'p', 'k': ['чем занимаетесь', 'что вы делаете', 'какие работы выполняете', 'о компании'],
      'r': 'CCTVMOS обслуживает, ремонтирует, устанавливает и модернизирует системы видеонаблюдения для бизнеса. Расскажите, что требуется на вашем объекте.'},
@@ -367,15 +368,6 @@ def admin_menu_kb():
 
 
 # ============================================================
-# ОТПРАВКА ЗАЯВКИ АДМИНАМ
-# ============================================================
-def notify_admins(text, urgent=False):
-    prefix = '🚨 СРОЧНО — ' if urgent else '🤖 '
-    for admin_id in ADMIN_IDS:
-        send_message(admin_id, prefix + text)
-
-
-# ============================================================
 # ОБРАБОТКА СООБЩЕНИЙ ОТ КЛИЕНТА
 # ============================================================
 def handle_client_message(user_id, text, first_name, username, data):
@@ -391,7 +383,7 @@ def handle_client_message(user_id, text, first_name, username, data):
 
     if text in ('/start', '/menu', 'Меню'):
         send_message(user_id,
-                     f'Здравствуйте, {first_name}!\n\nЭто бот CCTVMOS — обслуживание видеонаблюдения для коммерческих объектов Москвы.\n\nВыберите раздел в меню или напишите вопрос.',
+                     'Здравствуйте, ' + first_name + '!\n\nЭто бот CCTVMOS — обслуживание видеонаблюдения для коммерческих объектов Москвы.\n\nВыберите раздел в меню или напишите вопрос.',
                      main_menu_kb())
         return
 
@@ -410,9 +402,10 @@ def handle_client_message(user_id, text, first_name, username, data):
         save_data(data)
         for admin_id in ADMIN_IDS:
             send_message(admin_id,
-                         f'🤔 Не понял вопрос\n\n👤 {first_name}\n🔗 @{username or "—"}\n🆔 {user_id}\n\n💬 {text}',
-                         make_keyboard([[btn('🎯 Присвоить правило', f'learn:unk:{user_id}:{int(time.time())}')]]))
-        send_message(user_id, f'✅ Спасибо, {first_name}! Сообщение передано менеджеру.', main_menu_kb())
+                         '🤔 Не понял вопрос\n\n👤 ' + first_name + '\n🔗 @' + (username or '—') + '\n🆔 ' + str(user_id) + '\n\n💬 ' + text,
+                         make_keyboard([[btn('🎯 Присвоить правило', 'learn:unk:' + str(user_id) + ':' + str(int(time.time())))]])
+                         )
+        send_message(user_id, '✅ Спасибо, ' + first_name + '! Сообщение передано менеджеру.', main_menu_kb())
         return
 
     urgent = any(m['p'] == 'a' for m in matches)
@@ -423,21 +416,21 @@ def handle_client_message(user_id, text, first_name, username, data):
     elif len(matches) <= 3 and not urgent:
         reply = 'У вас несколько вопросов — отвечу по порядку:\n\n'
         for m in matches:
-            reply += f"▫️ {m['r']}\n\n"
+            reply += '▫️ ' + m['r'] + '\n\n'
         reply += 'Если нужно уточнить — напишите или позвоните.'
     else:
         reply = 'Похоже, у вас несколько проблем. Передам специалисту СРОЧНО.\n\nТемы:\n'
         for m in matches[:5]:
             first = m['r'].split('\n')[0].replace('🚨 ', '')
-            reply += f'▫️ {first}\n'
-        reply += f'\nЕсли срочно — позвоните: {PHONE}'
+            reply += '▫️ ' + first + '\n'
+        reply += '\nЕсли срочно — позвоните: ' + PHONE
 
     send_message(user_id, reply, main_menu_kb())
 
-    header = (f'🚨 СРОЧНО — сообщение от клиента\n\n👤 {first_name}\n🔗 @{username or "—"}\n🆔 {user_id}\n\n💬 {text}\n\n'
-              f'🎯 Распознано тем: {len(matches)}') if urgent else \
-             (f'🤖 Автоответ отправлен клиенту\n\n👤 {first_name}\n🔗 @{username or "—"}\n🆔 {user_id}\n\n'
-              f'💬 {text}\n\n🎯 Распознано тем: {len(matches)}')
+    if urgent:
+        header = ('🚨 СРОЧНО — сообщение от клиента\n\n👤 ' + first_name + '\n🔗 @' + (username or '—') + '\n🆔 ' + str(user_id) + '\n\n💬 ' + text + '\n\n🎯 Распознано тем: ' + str(len(matches)))
+    else:
+        header = ('🤖 Автоответ отправлен клиенту\n\n👤 ' + first_name + '\n🔗 @' + (username or '—') + '\n🆔 ' + str(user_id) + '\n\n💬 ' + text + '\n\n🎯 Распознано тем: ' + str(len(matches)))
     for admin_id in ADMIN_IDS:
         send_message(admin_id, header)
 
@@ -451,7 +444,7 @@ def continue_lead(draft, user_id, text, first_name, username, data):
         draft['name'] = text[:100]
         draft['step'] = 'phone'
         save_data(data)
-        send_message(user_id, f'Спасибо, {draft["name"]}!\n\nУкажите номер телефона.')
+        send_message(user_id, 'Спасибо, ' + draft['name'] + '!\n\nУкажите номер телефона.')
         return
     if step == 'phone':
         digits = re.sub(r'\D', '', text)
@@ -487,7 +480,7 @@ def continue_lead(draft, user_id, text, first_name, username, data):
 
 def finalize_lead(draft, user_id, first_name, username, data):
     now = time.localtime()
-    num = f'{now.tm_mday:02d}{now.tm_mon:02d}-{now.tm_hour:02d}{now.tm_min:02d}'
+    num = '{:02d}{:02d}-{:02d}{:02d}'.format(now.tm_mday, now.tm_mon, now.tm_hour, now.tm_min)
     lead = {
         'number': num,
         'name': draft.get('name', ''),
@@ -504,14 +497,14 @@ def finalize_lead(draft, user_id, first_name, username, data):
     data['drafts'].pop(str(user_id), None)
     save_data(data)
 
-    msg = (f'📩 Новая заявка из бота №{num}\n\n'
-           f'👤 {lead["name"]}\n📞 {lead["phone"]}\n🏢 {lead["object"]}\n🔧 {lead["service"]}\n\n'
-           f'🔗 @{username or "—"}\n🆔 {user_id}')
+    msg = ('📩 Новая заявка из бота №' + num + '\n\n'
+           '👤 ' + lead['name'] + '\n📞 ' + lead['phone'] + '\n🏢 ' + lead['object'] + '\n🔧 ' + lead['service'] + '\n\n'
+           '🔗 @' + (username or '—') + '\n🆔 ' + str(user_id))
     for admin_id in ADMIN_IDS:
         send_message(admin_id, msg)
 
     send_message(user_id,
-                 f'✅ Заявка №{num} принята!\n\n📞 {lead["phone"]}\n🏢 {lead["object"]}\n🔧 {lead["service"]}\n\nМенеджер свяжется с вами.',
+                 '✅ Заявка №' + num + ' принята!\n\n📞 ' + lead['phone'] + '\n🏢 ' + lead['object'] + '\n🔧 ' + lead['service'] + '\n\nМенеджер свяжется с вами.',
                  main_menu_kb())
 
 
@@ -531,13 +524,13 @@ def handle_admin_message(user_id, text, data):
         leads = data['leads']
         today = [l for l in leads if l['created_at'] >= time.time() - 86400]
         week = [l for l in leads if l['created_at'] >= time.time() - 7 * 86400]
-        send_message(user_id, f'📊 Заявок всего: {len(leads)}\nЗа 24 часа: {len(today)}\nЗа 7 дней: {len(week)}', admin_menu_kb())
+        send_message(user_id, '📊 Заявок всего: ' + str(len(leads)) + '\nЗа 24 часа: ' + str(len(today)) + '\nЗа 7 дней: ' + str(len(week)), admin_menu_kb())
         return
     if text == '/list':
         last = data['leads'][-10:][::-1]
         out = '📋 Последние заявки:\n\n'
         for l in last:
-            out += f'№{l["number"]} — {l["name"]}\n🏢 {l["object"]} · 🔧 {l["service"]}\n📞 {l["phone"]}\n\n'
+            out += '№' + l['number'] + ' — ' + l['name'] + '\n🏢 ' + l['object'] + ' · 🔧 ' + l['service'] + '\n📞 ' + l['phone'] + '\n\n'
         send_message(user_id, out or 'Заявок нет.', admin_menu_kb())
         return
     if text.startswith('/find '):
@@ -545,38 +538,36 @@ def handle_admin_message(user_id, text, data):
         for l in data['leads']:
             if l['number'] == num:
                 send_message(user_id,
-                             f'📋 Заявка №{l["number"]}\n\n👤 {l["name"]}\n📞 {l["phone"]}\n🏢 {l["object"]}\n🔧 {l["service"]}',
+                             '📋 Заявка №' + l['number'] + '\n\n👤 ' + l['name'] + '\n📞 ' + l['phone'] + '\n🏢 ' + l['object'] + '\n🔧 ' + l['service'],
                              admin_menu_kb())
                 return
-        send_message(user_id, f'Заявка №{num} не найдена.', admin_menu_kb())
+        send_message(user_id, 'Заявка №' + num + ' не найдена.', admin_menu_kb())
         return
     if text == '/unknowns':
         unknowns = data['unknowns'][-10:][::-1]
-        out = f'🧠 Непонятые ({len(unknowns)}):\n\n'
+        out = '🧠 Непонятые (' + str(len(unknowns)) + '):\n\n'
         rows = []
         for i, u in enumerate(unknowns, 1):
             preview = u['text'][:60].replace('\n', ' ')
-            out += f'{i}. {u["name"]} — «{preview}…»\n'
-            rows.append([btn(f'🎯 {i}. {u["name"]}', f'learn:unk:{u["user_id"]}:{u["ts"]}')])
+            out += str(i) + '. ' + u['name'] + ' — «' + preview + '…»\n'
+            rows.append([btn('🎯 ' + str(i) + '. ' + u['name'], 'learn:unk:' + str(u['user_id']) + ':' + str(u['ts']))])
         send_message(user_id, out, make_keyboard(rows) if rows else None)
         return
     if text == '/rules':
-        rows = [[btn(f'{g["emoji"]} {g["name"]}', f'rules:grp:{i}')] for i, g in enumerate(RULES_GROUPS)]
+        rows = [[btn(g['emoji'] + ' ' + g['name'], 'rules:grp:' + str(i))] for i, g in enumerate(RULES_GROUPS)]
         send_message(user_id, '📚 Правила FAQ — выберите группу:', make_keyboard(rows))
         return
 
 
 # ============================================================
-# CALLBACK (нажатие inline-кнопок)
+# CALLBACK
 # ============================================================
 def handle_callback(user_id, payload, data):
     is_admin = user_id in ADMIN_IDS
 
-    # --- Главное меню клиента ---
     if payload == 'menu:lead':
         data['drafts'][str(user_id)] = {'step': 'name'}
         save_data(data)
-        answer_callback(None, '')
         send_message(user_id, 'Как вас зовут?')
         return
     if payload == 'menu:phone':
@@ -597,7 +588,6 @@ def handle_callback(user_id, payload, data):
         send_message(user_id, 'Свяжитесь с менеджером:\n\n📞 ' + PHONE, main_menu_kb())
         return
 
-    # --- Админские команды ---
     if is_admin and payload == 'adm:stats':
         handle_admin_message(user_id, '/stats', data)
         return
@@ -611,24 +601,21 @@ def handle_callback(user_id, payload, data):
         handle_admin_message(user_id, '/rules', data)
         return
 
-    # --- Показать правила группы ---
     if is_admin and payload.startswith('rules:grp:'):
         idx = int(payload[10:])
         g = RULES_GROUPS[idx]
-        out = f'{g["emoji"]} {g["name"]}\n\n'
+        out = g['emoji'] + ' ' + g['name'] + '\n\n'
         n = group_start_index(idx)
         for rid in g['ids']:
-            out += f'{n}. {rule_title(rid)}\n'
+            out += str(n) + '. ' + rule_title(rid) + '\n'
             n += 1
         send_message(user_id, out, admin_menu_kb())
         return
 
-    # --- Выбрали непопадание ---
     if is_admin and payload.startswith('learn:unk:'):
         parts = payload.split(':')
         unk_user_id = parts[2]
         unk_ts = parts[3]
-        # Находим запись
         found = None
         for u in data['unknowns']:
             if str(u['user_id']) == unk_user_id and str(u['ts']) == unk_ts:
@@ -637,12 +624,11 @@ def handle_callback(user_id, payload, data):
         if not found:
             send_message(user_id, 'Уже присвоено или удалено.')
             return
-        rows = [[btn(f'{g["emoji"]} {g["name"]}', f'learn:grp:{i}:{unk_user_id}:{unk_ts}')]
+        rows = [[btn(g['emoji'] + ' ' + g['name'], 'learn:grp:' + str(i) + ':' + unk_user_id + ':' + unk_ts)]
                 for i, g in enumerate(RULES_GROUPS)]
-        send_message(user_id, f'📝 Присваиваем правило для:\n\n«{found["text"][:80]}»\n\nВыберите группу:', make_keyboard(rows))
+        send_message(user_id, '📝 Присваиваем правило для:\n\n«' + found['text'][:80] + '»\n\nВыберите группу:', make_keyboard(rows))
         return
 
-    # --- Выбрали группу ---
     if is_admin and payload.startswith('learn:grp:'):
         parts = payload.split(':')
         idx = int(parts[2])
@@ -652,12 +638,11 @@ def handle_callback(user_id, payload, data):
         rows = []
         n = group_start_index(idx)
         for rid in g['ids']:
-            rows.append([btn(f'{n}. {rule_title(rid)}', f'learn:rule:{n}:{unk_user_id}:{unk_ts}')])
+            rows.append([btn(str(n) + '. ' + rule_title(rid), 'learn:rule:' + str(n) + ':' + unk_user_id + ':' + unk_ts)])
             n += 1
-        send_message(user_id, f'{g["emoji"]} {g["name"]}\n\nВыберите правило:', make_keyboard(rows))
+        send_message(user_id, g['emoji'] + ' ' + g['name'] + '\n\nВыберите правило:', make_keyboard(rows))
         return
 
-    # --- Выбрали правило ---
     if is_admin and payload.startswith('learn:rule:'):
         parts = payload.split(':')
         num = int(parts[2])
@@ -667,7 +652,6 @@ def handle_callback(user_id, payload, data):
         if not rule_id:
             send_message(user_id, 'Правило не найдено.')
             return
-        # Находим запись и удаляем
         found = None
         for i, u in enumerate(data['unknowns']):
             if str(u['user_id']) == unk_user_id and str(u['ts']) == unk_ts:
@@ -684,11 +668,10 @@ def handle_callback(user_id, payload, data):
             custom[rule_id] = arr[-50:]
         save_data(data)
         send_message(user_id,
-                     f'✅ Присвоено правилу «{rule_title(rule_id)}»:\n\n«{phrase}»\n\nТеперь это сообщение будет вести к ответу FAQ.',
+                     '✅ Присвоено правилу «' + rule_title(rule_id) + '»:\n\n«' + phrase + '»\n\nТеперь это сообщение будет вести к ответу FAQ.',
                      admin_menu_kb())
         return
 
-    # --- Ответы объектов и услуг (клиент) ---
     draft = data['drafts'].get(str(user_id))
     if not draft:
         return
@@ -721,7 +704,6 @@ def handle_callback(user_id, payload, data):
 # ============================================================
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    # Проверка секрета (если MAX передаёт)
     secret = request.headers.get('X-Max-Bot-Api-Secret', '')
     if WEBHOOK_SECRET and secret != WEBHOOK_SECRET:
         return jsonify({'ok': False}), 403
@@ -735,7 +717,7 @@ def webhook():
         msg = update.get('message', {})
         sender = msg.get('sender', {})
         user_id = sender.get('user_id')
-        text = (msg.get('body', {}) or {}).get('text', '').strip()
+        text = ((msg.get('body', {}) or {}).get('text', '') or '').strip()
         first_name = sender.get('first_name', 'клиент')
         username = sender.get('username', '')
         if not user_id or not text:
@@ -757,12 +739,13 @@ def webhook():
         return jsonify({'ok': True})
 
     if update_type == 'bot_started':
-        user_id = (update.get('user') or {}).get('user_id')
+        user = update.get('user') or {}
+        user_id = user.get('user_id')
         if user_id:
             if user_id in ADMIN_IDS:
                 handle_admin_message(user_id, '/start', data)
             else:
-                first_name = (update.get('user') or {}).get('first_name', 'клиент')
+                first_name = user.get('first_name', 'клиент')
                 handle_client_message(user_id, '/start', first_name, '', data)
         return jsonify({'ok': True})
 
