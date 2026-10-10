@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import re
 import time
@@ -21,6 +22,13 @@ PHONE = '+7 (995) 655-04-65'
 app = Flask(__name__)
 
 
+def log(msg):
+    try:
+        print('[LOG] ' + str(msg), flush=True)
+    except Exception:
+        pass
+
+
 # ============================================================
 # ХРАНИЛИЩЕ
 # ============================================================
@@ -39,7 +47,7 @@ def save_data(d):
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
             json.dump(d, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print('SAVE ERROR:', e)
+        log('SAVE ERROR: ' + str(e))
 
 
 # ============================================================
@@ -47,7 +55,7 @@ def save_data(d):
 # ============================================================
 def api_request(method, path, params=None, body=None):
     if not BOT_TOKEN:
-        print('NO TOKEN')
+        log('NO TOKEN - skip API call')
         return None
     url = API + path
     headers = {
@@ -55,6 +63,7 @@ def api_request(method, path, params=None, body=None):
         'Content-Type': 'application/json',
     }
     try:
+        log('API CALL ' + method + ' ' + path + ' params=' + json.dumps(params or {}, ensure_ascii=False))
         if method == 'GET':
             r = requests.get(url, headers=headers, params=params or {}, timeout=10)
         elif method == 'POST':
@@ -63,12 +72,15 @@ def api_request(method, path, params=None, body=None):
             r = requests.put(url, headers=headers, params=params or {}, json=body or {}, timeout=10)
         else:
             return None
+        log('API RESPONSE ' + str(r.status_code) + ' body=' + r.text[:500])
         if r.status_code >= 400:
-            print('API ' + method + ' ' + path + ' -> ' + str(r.status_code) + ': ' + r.text[:200])
             return None
-        return r.json()
+        try:
+            return r.json()
+        except Exception:
+            return None
     except Exception as e:
-        print('API ERROR ' + path + ': ' + str(e))
+        log('API ERROR ' + path + ': ' + str(e))
         return None
 
 
@@ -76,6 +88,7 @@ def send_message(user_id, text, keyboard=None):
     body = {'text': text}
     if keyboard:
         body['attachments'] = [keyboard]
+    log('SEND to user_id=' + str(user_id) + ' text=' + text[:80])
     return api_request('POST', '/messages', params={'user_id': user_id}, body=body)
 
 
@@ -371,6 +384,8 @@ def admin_menu_kb():
 # ОБРАБОТКА СООБЩЕНИЙ ОТ КЛИЕНТА
 # ============================================================
 def handle_client_message(user_id, text, first_name, username, data):
+    log('CLIENT MSG from ' + str(user_id) + ' (' + first_name + '): ' + text[:80])
+
     draft = data['drafts'].get(str(user_id))
     if draft and draft.get('step'):
         if text in ('/start', '/cancel', 'Меню'):
@@ -394,6 +409,7 @@ def handle_client_message(user_id, text, first_name, username, data):
         return
 
     matches = find_replies(text, data)
+    log('MATCHED: ' + str([m['id'] for m in matches]))
 
     if not matches:
         data['unknowns'].append({'text': text, 'user_id': user_id, 'name': first_name,
@@ -402,9 +418,7 @@ def handle_client_message(user_id, text, first_name, username, data):
         save_data(data)
         for admin_id in ADMIN_IDS:
             send_message(admin_id,
-                         '🤔 Не понял вопрос\n\n👤 ' + first_name + '\n🔗 @' + (username or '—') + '\n🆔 ' + str(user_id) + '\n\n💬 ' + text,
-                         make_keyboard([[btn('🎯 Присвоить правило', 'learn:unk:' + str(user_id) + ':' + str(int(time.time())))]])
-                         )
+                         '🤔 Не понял вопрос\n\n👤 ' + first_name + '\n🔗 @' + (username or '—') + '\n🆔 ' + str(user_id) + '\n\n💬 ' + text)
         send_message(user_id, '✅ Спасибо, ' + first_name + '! Сообщение передано менеджеру.', main_menu_kb())
         return
 
@@ -428,9 +442,9 @@ def handle_client_message(user_id, text, first_name, username, data):
     send_message(user_id, reply, main_menu_kb())
 
     if urgent:
-        header = ('🚨 СРОЧНО — сообщение от клиента\n\n👤 ' + first_name + '\n🔗 @' + (username or '—') + '\n🆔 ' + str(user_id) + '\n\n💬 ' + text + '\n\n🎯 Распознано тем: ' + str(len(matches)))
+        header = '🚨 СРОЧНО — сообщение от клиента\n\n👤 ' + first_name + '\n🔗 @' + (username or '—') + '\n🆔 ' + str(user_id) + '\n\n💬 ' + text + '\n\n🎯 Распознано тем: ' + str(len(matches))
     else:
-        header = ('🤖 Автоответ отправлен клиенту\n\n👤 ' + first_name + '\n🔗 @' + (username or '—') + '\n🆔 ' + str(user_id) + '\n\n💬 ' + text + '\n\n🎯 Распознано тем: ' + str(len(matches)))
+        header = '🤖 Автоответ отправлен клиенту\n\n👤 ' + first_name + '\n🔗 @' + (username or '—') + '\n🆔 ' + str(user_id) + '\n\n💬 ' + text + '\n\n🎯 Распознано тем: ' + str(len(matches))
     for admin_id in ADMIN_IDS:
         send_message(admin_id, header)
 
@@ -512,6 +526,8 @@ def finalize_lead(draft, user_id, first_name, username, data):
 # ОБРАБОТКА СООБЩЕНИЙ АДМИНА
 # ============================================================
 def handle_admin_message(user_id, text, data):
+    log('ADMIN MSG from ' + str(user_id) + ': ' + text[:80])
+
     if text in ('/start', '/help', 'Меню'):
         send_message(user_id,
                      '👋 Админ-панель CCTVMOS\n\nКоманды:\n'
@@ -563,6 +579,7 @@ def handle_admin_message(user_id, text, data):
 # CALLBACK
 # ============================================================
 def handle_callback(user_id, payload, data):
+    log('CALLBACK from ' + str(user_id) + ' payload=' + payload)
     is_admin = user_id in ADMIN_IDS
 
     if payload == 'menu:lead':
@@ -704,52 +721,69 @@ def handle_callback(user_id, payload, data):
 # ============================================================
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    secret = request.headers.get('X-Max-Bot-Api-Secret', '')
-    if WEBHOOK_SECRET and secret != WEBHOOK_SECRET:
-        return jsonify({'ok': False}), 403
+    try:
+        raw = request.get_data(as_text=True)
+        log('RAW WEBHOOK: ' + raw[:1500])
 
-    update = request.get_json(silent=True) or {}
-    update_type = update.get('update_type', '')
+        secret = request.headers.get('X-Max-Bot-Api-Secret', '')
+        if WEBHOOK_SECRET and secret != WEBHOOK_SECRET:
+            log('WEBHOOK SECRET MISMATCH')
+            return jsonify({'ok': False}), 403
 
-    data = load_data()
+        update = request.get_json(silent=True) or {}
+        update_type = update.get('update_type', '')
+        log('UPDATE TYPE: ' + update_type)
 
-    if update_type == 'message_created':
-        msg = update.get('message', {})
-        sender = msg.get('sender', {})
-        user_id = sender.get('user_id')
-        text = ((msg.get('body', {}) or {}).get('text', '') or '').strip()
-        first_name = sender.get('first_name', 'клиент')
-        username = sender.get('username', '')
-        if not user_id or not text:
-            return jsonify({'ok': True})
-        if user_id in ADMIN_IDS:
-            handle_admin_message(user_id, text, data)
-        else:
-            handle_client_message(user_id, text, first_name, username, data)
-        return jsonify({'ok': True})
+        data = load_data()
 
-    if update_type == 'message_callback':
-        cb = update.get('callback', {})
-        payload = cb.get('payload', '')
-        user = cb.get('user', {})
-        user_id = user.get('user_id')
-        if not user_id:
-            return jsonify({'ok': True})
-        handle_callback(user_id, payload, data)
-        return jsonify({'ok': True})
-
-    if update_type == 'bot_started':
-        user = update.get('user') or {}
-        user_id = user.get('user_id')
-        if user_id:
+        if update_type == 'message_created':
+            msg = update.get('message', {}) or {}
+            sender = msg.get('sender', {}) or {}
+            user_id = sender.get('user_id')
+            body = msg.get('body', {}) or {}
+            text = (body.get('text', '') or '').strip()
+            first_name = sender.get('first_name') or sender.get('name') or 'клиент'
+            username = sender.get('username', '') or ''
+            log('PARSED: user_id=' + str(user_id) + ' text=' + repr(text[:80]))
+            if not user_id or not text:
+                log('SKIP: empty user_id or text')
+                return jsonify({'ok': True})
             if user_id in ADMIN_IDS:
-                handle_admin_message(user_id, '/start', data)
+                handle_admin_message(user_id, text, data)
             else:
-                first_name = user.get('first_name', 'клиент')
-                handle_client_message(user_id, '/start', first_name, '', data)
-        return jsonify({'ok': True})
+                handle_client_message(user_id, text, first_name, username, data)
+            return jsonify({'ok': True})
 
-    return jsonify({'ok': True})
+        if update_type == 'message_callback':
+            cb = update.get('callback', {}) or {}
+            payload = cb.get('payload', '') or ''
+            user = cb.get('user', {}) or {}
+            user_id = user.get('user_id')
+            log('CALLBACK: user_id=' + str(user_id) + ' payload=' + payload)
+            if not user_id:
+                return jsonify({'ok': True})
+            handle_callback(user_id, payload, data)
+            return jsonify({'ok': True})
+
+        if update_type == 'bot_started':
+            user = update.get('user') or {}
+            user_id = user.get('user_id')
+            log('BOT_STARTED: user_id=' + str(user_id))
+            if user_id:
+                if user_id in ADMIN_IDS:
+                    handle_admin_message(user_id, '/start', data)
+                else:
+                    first_name = user.get('first_name', 'клиент')
+                    handle_client_message(user_id, '/start', first_name, '', data)
+            return jsonify({'ok': True})
+
+        log('UNKNOWN UPDATE TYPE: ' + update_type)
+        return jsonify({'ok': True})
+    except Exception as e:
+        log('WEBHOOK ERROR: ' + str(e))
+        import traceback
+        log('TRACEBACK: ' + traceback.format_exc())
+        return jsonify({'ok': True})
 
 
 @app.route('/', methods=['GET'])
@@ -757,9 +791,6 @@ def index():
     return 'CCTVMOS MAX Bot is running'
 
 
-# ============================================================
-# ЗАПУСК
-# ============================================================
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
