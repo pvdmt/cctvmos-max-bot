@@ -873,20 +873,42 @@ def site_lead():
             log('SITE LEAD: empty text')
             return jsonify({'ok': True})
 
+        # Парсим текст заявки
+        parsed = {}
+        for line in text.split('\n'):
+            if ':' in line:
+                k, v = line.split(':', 1)
+                parsed[k.strip()] = v.strip()
+
+        # Номер заявки
+        now = time.localtime()
+        num = '{:02d}{:02d}-{:02d}{:02d}'.format(now.tm_mday, now.tm_mon, now.tm_hour, now.tm_min)
+
+        data = load_data()
+        lead = {
+            'number': num,
+            'name': parsed.get('Имя', '—'),
+            'phone': normalize_phone(parsed.get('Телефон', '')),
+            'object': parsed.get('Объект', '—'),
+            'service': parsed.get('Услуга') or parsed.get('Что интересует') or '—',
+            'comment': parsed.get('Комментарий', ''),
+            'source': 'Заявка с сайта',
+            'client_name': parsed.get('Имя', ''),
+            'client_username': '',
+            'user_id': '',
+            'created_at': int(time.time()),
+            'raw_text': text,
+        }
+        data['leads'].append(lead)
+        data['leads'] = data['leads'][-500:]
+        save_data(data)
+
         for admin_id in ADMIN_IDS:
             send_message(admin_id, text)
 
-        return jsonify({'ok': True})
+        return jsonify({'ok': True, 'number': num})
     except Exception as e:
         log('SITE LEAD ERROR: ' + str(e))
+        import traceback
+        log('TRACEBACK: ' + traceback.format_exc())
         return jsonify({'ok': True})
-
-
-@app.route('/', methods=['GET'])
-def index():
-    return 'CCTVMOS MAX Bot is running'
-
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
