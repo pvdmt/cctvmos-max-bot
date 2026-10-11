@@ -432,7 +432,8 @@ def handle_client_message(user_id, text, first_name, username, data):
 
     if not matches:
         data['unknowns'].append({'text': text, 'user_id': user_id, 'name': first_name,
-                                 'username': username, 'ts': int(time.time())})
+                                 'username': username, 'ts': int(time.time()),
+                                 'assigned_rules': []})
         data['unknowns'] = data['unknowns'][-100:]
         save_data(data)
         for admin_id in ADMIN_IDS:
@@ -636,7 +637,9 @@ def handle_admin_message(user_id, text, data):
         rows = []
         for i, u in enumerate(unknowns, 1):
             preview = u['text'][:60].replace('\n', ' ')
-            out += str(i) + '. ' + u['name'] + ' — «' + preview + '…»\n'
+            assigned = u.get('assigned_rules', [])
+            mark = ' (' + str(len(assigned)) + ')' if assigned else ''
+            out += str(i) + '. ' + u['name'] + mark + ' — «' + preview + '…»\n'
             rows.append([btn('🎯 ' + str(i) + '. ' + u['name'], 'learn:unk:' + str(u['user_id']) + ':' + str(u['ts']))])
         send_message(user_id, out, make_keyboard(rows) if rows else None)
         return
@@ -700,7 +703,7 @@ def handle_callback(user_id, payload, data):
         send_message(user_id, out, admin_menu_kb())
         return
 
-        if is_admin and payload.startswith('learn:unk:'):
+    if is_admin and payload.startswith('learn:unk:'):
         parts = payload.split(':')
         unk_user_id = parts[2]
         unk_ts = parts[3]
@@ -729,13 +732,12 @@ def handle_callback(user_id, payload, data):
         send_message(user_id, out, make_keyboard(rows))
         return
 
-        if is_admin and payload.startswith('learn:grp:'):
+    if is_admin and payload.startswith('learn:grp:'):
         parts = payload.split(':')
         idx = int(parts[2])
         unk_user_id = parts[3]
         unk_ts = parts[4]
         g = RULES_GROUPS[idx]
-        # Читаем присвоенные
         assigned = []
         for u in data['unknowns']:
             if str(u['user_id']) == unk_user_id and str(u['ts']) == unk_ts:
@@ -753,7 +755,7 @@ def handle_callback(user_id, payload, data):
         send_message(user_id, g['emoji'] + ' ' + g['name'] + '\n\nВыберите правило (✅ — уже присвоено):', make_keyboard(rows))
         return
 
-            if is_admin and payload.startswith('learn:rule:'):
+    if is_admin and payload.startswith('learn:rule:'):
         parts = payload.split(':')
         num = int(parts[2])
         unk_user_id = parts[3]
@@ -794,7 +796,8 @@ def handle_callback(user_id, payload, data):
                      '✅ Присвоено к «' + rule_title(rule_id) + '».\n\nВсего правил: ' + str(len(assigned)) + '.\n\nПродолжить присвоение или завершить?',
                      make_keyboard(rows))
         return
-            if is_admin and payload.startswith('learn:done:'):
+
+    if is_admin and payload.startswith('learn:done:'):
         parts = payload.split(':')
         unk_user_id = parts[2]
         unk_ts = parts[3]
@@ -823,8 +826,6 @@ def handle_callback(user_id, payload, data):
         send_message(user_id, out, admin_menu_kb())
         return
 
-    
-    # ---------- Открыть полную заявку ----------
     if is_admin and payload.startswith('lead:view:'):
         num = payload[10:]
         found = None
@@ -936,7 +937,6 @@ def webhook():
             user_id = user.get('user_id')
             log('BOT_STARTED: user_id=' + str(user_id))
             if user_id:
-                # Проверяем deep-link в payload
                 payload = update.get('payload') or ''
                 if user_id in ADMIN_IDS:
                     if payload and payload.startswith('lead_'):
