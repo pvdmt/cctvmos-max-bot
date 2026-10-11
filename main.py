@@ -834,3 +834,13 @@ def site_lead():
     except Exception as e:
         log('SITE LEAD ERROR: ' + str(e))
         return jsonify({'ok': True})
+
+
+@app.route('/', methods=['GET'])
+def index():
+    return 'CCTVMOS MAX Bot is running'
+
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
