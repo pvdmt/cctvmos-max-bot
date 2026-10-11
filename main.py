@@ -801,3 +801,36 @@ def index():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+    # ============================================================
+# ЗАЯВКИ С САЙТА
+# ============================================================
+@app.route('/site-lead', methods=['POST'])
+def site_lead():
+    try:
+        raw = request.get_data(as_text=True)
+        log('SITE LEAD RAW: ' + raw[:1500])
+
+        secret = request.headers.get('X-Site-Token', '')
+        if WEBHOOK_SECRET and secret != WEBHOOK_SECRET:
+            log('SITE LEAD SECRET MISMATCH')
+            return jsonify({'ok': False}), 403
+
+        text = ''
+        ct = request.headers.get('Content-Type', '') or ''
+        if 'application/json' in ct:
+            d = request.get_json(silent=True) or {}
+            text = (d.get('text') or '').strip()
+        else:
+            text = (request.form.get('text') or '').strip()
+
+        if not text:
+            log('SITE LEAD: empty text')
+            return jsonify({'ok': True})
+
+        for admin_id in ADMIN_IDS:
+            send_message(admin_id, text)
+
+        return jsonify({'ok': True})
+    except Exception as e:
+        log('SITE LEAD ERROR: ' + str(e))
+        return jsonify({'ok': True})
