@@ -1,5 +1,4 @@
 import os
-import sys
 import json
 import re
 import time
@@ -13,13 +12,22 @@ from flask import Flask, request, jsonify
 # ============================================================
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '').strip()
 WEBHOOK_SECRET = os.environ.get('WEBHOOK_SECRET', '').strip()
+SITE_TOKEN = os.environ.get('SITE_TOKEN', '').strip()
 ADMIN_IDS = [int(x) for x in os.environ.get('ADMIN_IDS', '').split(',') if x.strip().isdigit()]
 
 API = 'https://platform-api2.max.ru'
+
+# Постоянная папка /app/data от Bothost. Если недоступна — падаем обратно на локальный файл.
 DATA_DIR = os.environ.get('DATA_DIR', '/app/data')
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR, exist_ok=True)
-DATA_FILE = os.path.join(DATA_DIR, 'data.json')
+DATA_FILE = 'data.json'
+try:
+    if DATA_DIR and os.path.isdir(DATA_DIR):
+        test_file = os.path.join(DATA_DIR, 'data.json')
+        with open(test_file, 'a', encoding='utf-8'):
+            pass
+        DATA_FILE = test_file
+except Exception as e:
+    print('[WARN] Cannot use DATA_DIR, using local file:', e, flush=True)
 
 SITE_URL = 'https://cctvmos.ru'
 PHONE = '+7 (995) 655-04-65'
@@ -67,11 +75,6 @@ def api_request(method, path, params=None, body=None):
         'Authorization': BOT_TOKEN,
         'Content-Type': 'application/json',
     }
-    # Отключаем проверку SSL — MAX использует сертификат Минцифры,
-    # который не входит в стандартный набор Python
-    import urllib3
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
     try:
         log('API CALL ' + method + ' ' + path + ' params=' + json.dumps(params or {}, ensure_ascii=False))
         if method == 'GET':
@@ -511,6 +514,7 @@ def finalize_lead(draft, user_id, first_name, username, data):
         'phone': draft.get('phone', ''),
         'object': draft.get('object', ''),
         'service': draft.get('service', ''),
+        'source': 'bot',
         'client_name': first_name,
         'client_username': username,
         'user_id': user_id,
@@ -556,15 +560,17 @@ def handle_admin_message(user_id, text, data):
         last = data['leads'][-10:][::-1]
         out = '📋 Последние заявки:\n\n'
         for l in last:
-            out += '№' + l['number'] + ' — ' + l['name'] + '\n🏢 ' + l['object'] + ' · 🔧 ' + l['service'] + '\n📞 ' + l['phone'] + '\n\n'
+            src = '🌐' if l.get('source') == 'site' else '🤖'
+            out += src + ' №' + l['number'] + ' — ' + l['name'] + '\n🏢 ' + l['object'] + ' · 🔧 ' + l['service'] + '\n📞 ' + l['phone'] + '\n\n'
         send_message(user_id, out or 'Заявок нет.', admin_menu_kb())
         return
     if text.startswith('/find '):
         num = text[6:].strip()
         for l in data['leads']:
             if l['number'] == num:
+                src = 'Сайт' if l.get('source') == 'site' else 'Бот'
                 send_message(user_id,
-                             '📋 Заявка №' + l['number'] + '\n\n👤 ' + l['name'] + '\n📞 ' + l['phone'] + '\n🏢 ' + l['object'] + '\n🔧 ' + l['service'],
+                             '📋 Заявка №' + l['number'] + ' (' + src + ')\n\n👤 ' + l['name'] + '\n📞 ' + l['phone'] + '\n🏢 ' + l['object'] + '\n🔧 ' + l['service'],
                              admin_menu_kb())
                 return
         send_message(user_id, 'Заявка №' + num + ' не найдена.', admin_menu_kb())
@@ -583,6 +589,9 @@ def handle_admin_message(user_id, text, data):
         rows = [[btn(g['emoji'] + ' ' + g['name'], 'rules:grp:' + str(i))] for i, g in enumerate(RULES_GROUPS)]
         send_message(user_id, '📚 Правила FAQ — выберите группу:', make_keyboard(rows))
         return
+
+    # Любое другое сообщение от админа — показываем меню
+    send_message(user_id, '👋 Что нужно сделать?', admin_menu_kb())
 
 
 # ============================================================
@@ -727,7 +736,7 @@ def handle_callback(user_id, payload, data):
 
 
 # ============================================================
-# ВЕБХУК
+# ВЕБХУК MAX
 # ============================================================
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -796,8 +805,7 @@ def webhook():
         return jsonify({'ok': True})
 
 
-
-    # ============================================================
+# ============================================================
 # ЗАЯВКИ С САЙТА
 # ============================================================
 @app.route('/site-lead', methods=['POST'])
@@ -807,7 +815,7 @@ def site_lead():
         log('SITE LEAD RAW: ' + raw[:1500])
 
         secret = request.headers.get('X-Site-Token', '')
-        if WEBHOOK_SECRET and secret != WEBHOOK_SECRET:
+        if SITE_TOKEN and secret != SITE_TOKEN:
             log('SITE LEAD SECRET MISMATCH')
             return jsonify({'ok': False}), 403
 
@@ -820,50 +828,52 @@ def site_lead():
             text = (request.form.get('text') or '').strip()
 
         if not text:
-    log('SITE LEAD: empty text')
-    return jsonify({'ok': True})
+            log('SITE LEAD: empty text')
+            return jsonify({'ok': True})
 
-# Сохраняем заявку с сайта в общий список
-now = time.localtime()
-num = '{:02d}{:02d}-{:02d}{:02d}'.format(now.tm_mday, now.tm_mon, now.tm_hour, now.tm_min)
+        # Сохраняем заявку с сайта в общий список
+        now = time.localtime()
+        num = '{:02d}{:02d}-{:02d}{:02d}'.format(now.tm_mday, now.tm_mon, now.tm_hour, now.tm_min)
 
-# Пробуем вытащить имя/телефон/объект из текста заявки
-name = ''
-phone = ''
-obj = ''
-service = ''
-for line in text.split('\n'):
-    line = line.strip()
-    if line.startswith('Имя:'):
-        name = line[4:].strip()
-    elif line.startswith('Телефон:'):
-        phone = line[8:].strip()
-    elif line.startswith('Объект:'):
-        obj = line[7:].strip()
-    elif line.startswith('Что интересует:'):
-        service = line[16:].strip()
-    elif line.startswith('Услуга:') and not service:
-        service = line[7:].strip()
+        name = ''
+        phone = ''
+        obj = ''
+        service = ''
+        for line in text.split('\n'):
+            line = line.strip()
+            if line.startswith('Имя:'):
+                name = line[4:].strip()
+            elif line.startswith('Телефон:'):
+                phone = line[8:].strip()
+            elif line.startswith('Объект:'):
+                obj = line[7:].strip()
+            elif line.startswith('Что интересует:'):
+                service = line[16:].strip()
+            elif line.startswith('Услуга:') and not service:
+                service = line[7:].strip()
 
-lead = {
-    'number': num,
-    'name': name or 'Заявка с сайта',
-    'phone': phone,
-    'object': obj,
-    'service': service,
-    'source': 'site',
-    'created_at': int(time.time()),
-}
-data = load_data()
-data['leads'].append(lead)
-data['leads'] = data['leads'][-500:]
-save_data(data)
-log('SITE LEAD SAVED: №' + num + ' ' + name)
+        lead = {
+            'number': num,
+            'name': name or 'Заявка с сайта',
+            'phone': phone,
+            'object': obj,
+            'service': service,
+            'source': 'site',
+            'created_at': int(time.time()),
+        }
+        data = load_data()
+        data['leads'].append(lead)
+        data['leads'] = data['leads'][-500:]
+        save_data(data)
+        log('SITE LEAD SAVED: №' + num + ' ' + name)
 
-for admin_id in ADMIN_IDS:
-    send_message(admin_id, text)
+        for admin_id in ADMIN_IDS:
+            send_message(admin_id, text)
 
-return jsonify({'ok': True})
+        return jsonify({'ok': True})
+    except Exception as e:
+        log('SITE LEAD ERROR: ' + str(e))
+        return jsonify({'ok': True})
 
 
 @app.route('/', methods=['GET'])
