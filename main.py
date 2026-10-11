@@ -700,7 +700,7 @@ def handle_callback(user_id, payload, data):
         send_message(user_id, out, admin_menu_kb())
         return
 
-    if is_admin and payload.startswith('learn:unk:'):
+        if is_admin and payload.startswith('learn:unk:'):
         parts = payload.split(':')
         unk_user_id = parts[2]
         unk_ts = parts[3]
@@ -712,26 +712,48 @@ def handle_callback(user_id, payload, data):
         if not found:
             send_message(user_id, 'Уже присвоено или удалено.')
             return
-        rows = [[btn(g['emoji'] + ' ' + g['name'], 'learn:grp:' + str(i) + ':' + unk_user_id + ':' + unk_ts)]
-                for i, g in enumerate(RULES_GROUPS)]
-        send_message(user_id, '📝 Присваиваем правило для:\n\n«' + found['text'][:80] + '»\n\nВыберите группу:', make_keyboard(rows))
+        assigned = found.get('assigned_rules', [])
+        preview = found['text'][:80].replace('\n', ' ')
+        out = '📝 Присваиваем правило для:\n\n«' + preview + '»\n\n'
+        if assigned:
+            out += '✅ Уже присвоено к ' + str(len(assigned)) + ':\n'
+            for rid in assigned:
+                out += '▫️ ' + rule_title(rid) + '\n'
+            out += '\n'
+        out += 'Выберите группу для добавления:'
+        rows = []
+        for i, g in enumerate(RULES_GROUPS):
+            rows.append([btn(g['emoji'] + ' ' + g['name'], 'learn:grp:' + str(i) + ':' + unk_user_id + ':' + unk_ts)])
+        if assigned:
+            rows.append([btn('✅ Готово', 'learn:done:' + unk_user_id + ':' + unk_ts)])
+        send_message(user_id, out, make_keyboard(rows))
         return
 
-    if is_admin and payload.startswith('learn:grp:'):
+        if is_admin and payload.startswith('learn:grp:'):
         parts = payload.split(':')
         idx = int(parts[2])
         unk_user_id = parts[3]
         unk_ts = parts[4]
         g = RULES_GROUPS[idx]
+        # Читаем присвоенные
+        assigned = []
+        for u in data['unknowns']:
+            if str(u['user_id']) == unk_user_id and str(u['ts']) == unk_ts:
+                assigned = u.get('assigned_rules', [])
+                break
         rows = []
         n = group_start_index(idx)
         for rid in g['ids']:
-            rows.append([btn(str(n) + '. ' + rule_title(rid), 'learn:rule:' + str(n) + ':' + unk_user_id + ':' + unk_ts)])
+            mark = '✅ ' if rid in assigned else ''
+            rows.append([btn(mark + str(n) + '. ' + rule_title(rid), 'learn:rule:' + str(n) + ':' + unk_user_id + ':' + unk_ts)])
             n += 1
-        send_message(user_id, g['emoji'] + ' ' + g['name'] + '\n\nВыберите правило:', make_keyboard(rows))
+        rows.append([btn('⬅️ К группам', 'learn:unk:' + unk_user_id + ':' + unk_ts)])
+        if assigned:
+            rows.append([btn('✅ Готово', 'learn:done:' + unk_user_id + ':' + unk_ts)])
+        send_message(user_id, g['emoji'] + ' ' + g['name'] + '\n\nВыберите правило (✅ — уже присвоено):', make_keyboard(rows))
         return
 
-    if is_admin and payload.startswith('learn:rule:'):
+            if is_admin and payload.startswith('learn:rule:'):
         parts = payload.split(':')
         num = int(parts[2])
         unk_user_id = parts[3]
@@ -740,26 +762,68 @@ def handle_callback(user_id, payload, data):
         if not rule_id:
             send_message(user_id, 'Правило не найдено.')
             return
+
         found = None
-        for i, u in enumerate(data['unknowns']):
+        for u in data['unknowns']:
             if str(u['user_id']) == unk_user_id and str(u['ts']) == unk_ts:
-                found = data['unknowns'].pop(i)
+                found = u
                 break
         if not found:
-            send_message(user_id, 'Уже присвоено.')
+            send_message(user_id, 'Сообщение уже удалено.')
             return
+
         phrase = found['text'].lower()[:100]
         custom = data.setdefault('custom_keys', {})
         arr = custom.setdefault(rule_id, [])
-        if phrase not in arr:
+        already_in = phrase in arr
+        if not already_in:
             arr.append(phrase)
             custom[rule_id] = arr[-50:]
+
+        assigned = found.get('assigned_rules', [])
+        if rule_id not in assigned:
+            assigned.append(rule_id)
+        found['assigned_rules'] = assigned
         save_data(data)
+
+        rows = [
+            [btn('➕ Присвоить ещё', 'learn:unk:' + unk_user_id + ':' + unk_ts)],
+            [btn('✅ Готово', 'learn:done:' + unk_user_id + ':' + unk_ts)],
+        ]
         send_message(user_id,
-                     '✅ Присвоено правилу «' + rule_title(rule_id) + '»:\n\n«' + phrase + '»\n\nТеперь это сообщение будет вести к ответу FAQ.',
-                     admin_menu_kb())
+                     '✅ Присвоено к «' + rule_title(rule_id) + '».\n\nВсего правил: ' + str(len(assigned)) + '.\n\nПродолжить присвоение или завершить?',
+                     make_keyboard(rows))
+        return
+            if is_admin and payload.startswith('learn:done:'):
+        parts = payload.split(':')
+        unk_user_id = parts[2]
+        unk_ts = parts[3]
+        found_idx = None
+        found = None
+        for i, u in enumerate(data['unknowns']):
+            if str(u['user_id']) == unk_user_id and str(u['ts']) == unk_ts:
+                found_idx = i
+                found = u
+                break
+        if found is None:
+            send_message(user_id, 'Уже удалено.', admin_menu_kb())
+            return
+        assigned = found.get('assigned_rules', [])
+        data['unknowns'].pop(found_idx)
+        save_data(data)
+
+        out = '✅ Готово!\n\n'
+        if not assigned:
+            out += 'Сообщение убрано из непопаданий без присвоения.'
+        else:
+            out += 'Сообщение привязано к ' + str(len(assigned)) + ' правил' + ('у' if len(assigned) == 1 else 'ам') + ':\n'
+            for rid in assigned:
+                out += '▫️ ' + rule_title(rid) + '\n'
+            out += '\nБот теперь будет отвечать на такие сообщения сразу.'
+        send_message(user_id, out, admin_menu_kb())
         return
 
+    
     # ---------- Открыть полную заявку ----------
     if is_admin and payload.startswith('lead:view:'):
         num = payload[10:]
