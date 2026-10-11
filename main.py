@@ -793,9 +793,6 @@ def webhook():
         return jsonify({'ok': True})
 
 
-@app.route('/', methods=['GET'])
-def index():
-    return 'CCTVMOS MAX Bot is running'
 
     # ============================================================
 # ЗАЯВКИ С САЙТА
