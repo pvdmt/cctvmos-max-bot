@@ -817,16 +817,50 @@ def site_lead():
             text = (request.form.get('text') or '').strip()
 
         if not text:
-            log('SITE LEAD: empty text')
-            return jsonify({'ok': True})
+    log('SITE LEAD: empty text')
+    return jsonify({'ok': True})
 
-        for admin_id in ADMIN_IDS:
-            send_message(admin_id, text)
+# Сохраняем заявку с сайта в общий список
+now = time.localtime()
+num = '{:02d}{:02d}-{:02d}{:02d}'.format(now.tm_mday, now.tm_mon, now.tm_hour, now.tm_min)
 
-        return jsonify({'ok': True})
-    except Exception as e:
-        log('SITE LEAD ERROR: ' + str(e))
-        return jsonify({'ok': True})
+# Пробуем вытащить имя/телефон/объект из текста заявки
+name = ''
+phone = ''
+obj = ''
+service = ''
+for line in text.split('\n'):
+    line = line.strip()
+    if line.startswith('Имя:'):
+        name = line[4:].strip()
+    elif line.startswith('Телефон:'):
+        phone = line[8:].strip()
+    elif line.startswith('Объект:'):
+        obj = line[7:].strip()
+    elif line.startswith('Что интересует:'):
+        service = line[16:].strip()
+    elif line.startswith('Услуга:') and not service:
+        service = line[7:].strip()
+
+lead = {
+    'number': num,
+    'name': name or 'Заявка с сайта',
+    'phone': phone,
+    'object': obj,
+    'service': service,
+    'source': 'site',
+    'created_at': int(time.time()),
+}
+data = load_data()
+data['leads'].append(lead)
+data['leads'] = data['leads'][-500:]
+save_data(data)
+log('SITE LEAD SAVED: №' + num + ' ' + name)
+
+for admin_id in ADMIN_IDS:
+    send_message(admin_id, text)
+
+return jsonify({'ok': True})
 
 
 @app.route('/', methods=['GET'])
