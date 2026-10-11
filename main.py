@@ -4,6 +4,8 @@ import json
 import re
 import time
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from flask import Flask, request, jsonify
 
 # ============================================================
@@ -62,14 +64,19 @@ def api_request(method, path, params=None, body=None):
         'Authorization': BOT_TOKEN,
         'Content-Type': 'application/json',
     }
+    # Отключаем проверку SSL — MAX использует сертификат Минцифры,
+    # который не входит в стандартный набор Python
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
     try:
         log('API CALL ' + method + ' ' + path + ' params=' + json.dumps(params or {}, ensure_ascii=False))
         if method == 'GET':
-            r = requests.get(url, headers=headers, params=params or {}, timeout=10)
+            r = requests.get(url, headers=headers, params=params or {}, timeout=10, verify=False)
         elif method == 'POST':
-            r = requests.post(url, headers=headers, params=params or {}, json=body or {}, timeout=10)
+            r = requests.post(url, headers=headers, params=params or {}, json=body or {}, timeout=10, verify=False)
         elif method == 'PUT':
-            r = requests.put(url, headers=headers, params=params or {}, json=body or {}, timeout=10)
+            r = requests.put(url, headers=headers, params=params or {}, json=body or {}, timeout=10, verify=False)
         else:
             return None
         log('API RESPONSE ' + str(r.status_code) + ' body=' + r.text[:500])
