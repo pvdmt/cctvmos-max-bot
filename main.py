@@ -16,7 +16,10 @@ WEBHOOK_SECRET = os.environ.get('WEBHOOK_SECRET', '').strip()
 ADMIN_IDS = [int(x) for x in os.environ.get('ADMIN_IDS', '').split(',') if x.strip().isdigit()]
 
 API = 'https://platform-api2.max.ru'
-DATA_FILE = 'data.json'
+DATA_DIR = os.environ.get('DATA_DIR', '/app/data')
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR, exist_ok=True)
+DATA_FILE = os.path.join(DATA_DIR, 'data.json')
 
 SITE_URL = 'https://cctvmos.ru'
 PHONE = '+7 (995) 655-04-65'
