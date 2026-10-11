@@ -18,6 +18,10 @@ DATA_FILE = 'data.json'
 
 SITE_URL = 'https://cctvmos.ru'
 PHONE = '+7 (995) 655-04-65'
+BOT_USERNAME = 'se14633851_bot'
+
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
@@ -62,9 +66,6 @@ def api_request(method, path, params=None, body=None):
         'Authorization': BOT_TOKEN,
         'Content-Type': 'application/json',
     }
-    import urllib3
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
     try:
         log('API CALL ' + method + ' ' + path + ' params=' + json.dumps(params or {}, ensure_ascii=False))
         if method == 'GET':
@@ -87,11 +88,12 @@ def api_request(method, path, params=None, body=None):
         return None
 
 
-def send_message(user_id, text, keyboard=None):
+def send_message(user_id, text, keyboard=None, format=None):
     body = {'text': text}
     if keyboard:
         body['attachments'] = [keyboard]
-    log('SEND to user_id=' + str(user_id) + ' text=' + text[:80])
+    if format:
+        body['format'] = format
     return api_request('POST', '/messages', params={'user_id': user_id}, body=body)
 
 
@@ -518,6 +520,8 @@ def finalize_lead(draft, user_id, first_name, username, data):
         'phone': normalize_phone(draft.get('phone', '')),
         'object': draft.get('object', ''),
         'service': draft.get('service', ''),
+        'comment': '',
+        'source': 'Заявка из бота',
         'client_name': first_name,
         'client_username': username,
         'user_id': user_id,
@@ -545,6 +549,37 @@ def finalize_lead(draft, user_id, first_name, username, data):
 def handle_admin_message(user_id, text, data):
     log('ADMIN MSG from ' + str(user_id) + ': ' + text[:80])
 
+    # Deep-link /start lead_XXX
+    if text.startswith('/start lead_'):
+        num = text[12:].strip()
+        found = None
+        for l in data['leads']:
+            if l['number'] == num:
+                found = l
+                break
+        if not found:
+            send_message(user_id, 'Заявка №' + num + ' не найдена.', admin_menu_kb())
+            return
+        created = found.get('created_at')
+        try:
+            created_str = time.strftime('%d.%m.%Y %H:%M', time.localtime(created)) if created else '—'
+        except Exception:
+            created_str = '—'
+        full = ('📋 Заявка №' + found['number'] + '\n\n'
+                '👤 Имя: ' + found['name'] + '\n'
+                '📞 Телефон: ' + found['phone'] + '\n'
+                '🏢 Объект: ' + found['object'] + '\n'
+                '🔧 Услуга: ' + found['service'] + '\n\n'
+                '📅 Создана: ' + created_str)
+        if found.get('comment'):
+            full += '\n\n📝 Комментарий: ' + found['comment']
+        if found.get('source'):
+            full += '\n📍 Источник: ' + found['source']
+        if found.get('raw_text'):
+            full += '\n\n📄 Оригинал:\n' + found['raw_text']
+        send_message(user_id, full, admin_menu_kb())
+        return
+
     if text in ('/start', '/help', 'Меню'):
         send_message(user_id,
                      '👋 Админ-панель CCTVMOS\n\nКоманды:\n'
@@ -564,12 +599,13 @@ def handle_admin_message(user_id, text, data):
         if not last:
             send_message(user_id, 'Заявок нет.', admin_menu_kb())
             return
-        out = '📋 Последние заявки — нажмите на номер, чтобы открыть:\n\n'
-        rows = []
+        out = '📋 Последние заявки — нажмите на номер:\n\n'
         for l in last:
-            out += '№' + l['number'] + ' — ' + l['name'] + '\n🏢 ' + l['object'] + ' · 🔧 ' + l['service'] + '\n📞 ' + l['phone'] + '\n\n'
-            rows.append([btn('№' + l['number'] + ' — ' + l['name'], 'lead:view:' + l['number'])])
-        send_message(user_id, out, make_keyboard(rows))
+            link = '[№' + l['number'] + '](https://max.ru/' + BOT_USERNAME + '?start=lead_' + l['number'] + ')'
+            out += link + ' — ' + l['name'] + '\n'
+            out += '🏢 ' + l['object'] + ' · 🔧 ' + l['service'] + '\n'
+            out += '📞 ' + l['phone'] + '\n\n'
+        send_message(user_id, out, admin_menu_kb(), 'markdown')
         return
     if text.startswith('/find '):
         num = text[6:].strip()
@@ -580,16 +616,17 @@ def handle_admin_message(user_id, text, data):
                     created_str = time.strftime('%d.%m.%Y %H:%M', time.localtime(created)) if created else '—'
                 except Exception:
                     created_str = '—'
-                send_message(user_id,
-                             '📋 Заявка №' + l['number'] + '\n\n'
-                             '👤 Имя: ' + l['name'] + '\n'
-                             '📞 Телефон: ' + l['phone'] + '\n'
-                             '🏢 Объект: ' + l['object'] + '\n'
-                             '🔧 Услуга: ' + l['service'] + '\n\n'
-                             '🔗 MAX: @' + (l.get('client_username') or '—') + '\n'
-                             '🆔 User ID: ' + str(l.get('user_id', '')) + '\n'
-                             '📅 Создана: ' + created_str,
-                             admin_menu_kb())
+                full = ('📋 Заявка №' + l['number'] + '\n\n'
+                        '👤 Имя: ' + l['name'] + '\n'
+                        '📞 Телефон: ' + l['phone'] + '\n'
+                        '🏢 Объект: ' + l['object'] + '\n'
+                        '🔧 Услуга: ' + l['service'] + '\n\n'
+                        '📅 Создана: ' + created_str)
+                if l.get('comment'):
+                    full += '\n\n📝 Комментарий: ' + l['comment']
+                if l.get('source'):
+                    full += '\n📍 Источник: ' + l['source']
+                send_message(user_id, full, admin_menu_kb())
                 return
         send_message(user_id, 'Заявка №' + num + ' не найдена.', admin_menu_kb())
         return
@@ -744,9 +781,13 @@ def handle_callback(user_id, payload, data):
                 '📞 Телефон: ' + found['phone'] + '\n'
                 '🏢 Объект: ' + found['object'] + '\n'
                 '🔧 Услуга: ' + found['service'] + '\n\n'
-                '🔗 MAX: @' + (found.get('client_username') or '—') + '\n'
-                '🆔 User ID: ' + str(found.get('user_id', '')) + '\n'
                 '📅 Создана: ' + created_str)
+        if found.get('comment'):
+            full += '\n\n📝 Комментарий: ' + found['comment']
+        if found.get('source'):
+            full += '\n📍 Источник: ' + found['source']
+        if found.get('raw_text'):
+            full += '\n\n📄 Оригинал:\n' + found['raw_text']
         send_message(user_id, full, admin_menu_kb())
         return
 
@@ -778,7 +819,7 @@ def handle_callback(user_id, payload, data):
 
 
 # ============================================================
-# ВЕБХУК MAX
+# ВЕБХУК
 # ============================================================
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -831,8 +872,13 @@ def webhook():
             user_id = user.get('user_id')
             log('BOT_STARTED: user_id=' + str(user_id))
             if user_id:
+                # Проверяем deep-link в payload
+                payload = update.get('payload') or ''
                 if user_id in ADMIN_IDS:
-                    handle_admin_message(user_id, '/start', data)
+                    if payload and payload.startswith('lead_'):
+                        handle_admin_message(user_id, '/start ' + payload, data)
+                    else:
+                        handle_admin_message(user_id, '/start', data)
                 else:
                     first_name = user.get('first_name', 'клиент')
                     handle_client_message(user_id, '/start', first_name, '', data)
@@ -873,14 +919,12 @@ def site_lead():
             log('SITE LEAD: empty text')
             return jsonify({'ok': True})
 
-        # Парсим текст заявки
         parsed = {}
         for line in text.split('\n'):
             if ':' in line:
                 k, v = line.split(':', 1)
                 parsed[k.strip()] = v.strip()
 
-        # Номер заявки
         now = time.localtime()
         num = '{:02d}{:02d}-{:02d}{:02d}'.format(now.tm_mday, now.tm_mon, now.tm_hour, now.tm_min)
 
@@ -912,3 +956,13 @@ def site_lead():
         import traceback
         log('TRACEBACK: ' + traceback.format_exc())
         return jsonify({'ok': True})
+
+
+@app.route('/', methods=['GET'])
+def index():
+    return 'CCTVMOS MAX Bot is running'
+
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
