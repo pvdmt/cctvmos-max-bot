@@ -1,10 +1,9 @@
 import os
+import sys
 import json
 import re
 import time
 import requests
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from flask import Flask, request, jsonify
 
 # ============================================================
@@ -12,22 +11,10 @@ from flask import Flask, request, jsonify
 # ============================================================
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '').strip()
 WEBHOOK_SECRET = os.environ.get('WEBHOOK_SECRET', '').strip()
-SITE_TOKEN = os.environ.get('SITE_TOKEN', '').strip()
 ADMIN_IDS = [int(x) for x in os.environ.get('ADMIN_IDS', '').split(',') if x.strip().isdigit()]
 
 API = 'https://platform-api2.max.ru'
-
-# Постоянная папка /app/data от Bothost. Если недоступна — падаем обратно на локальный файл.
-DATA_DIR = os.environ.get('DATA_DIR', '/app/data')
 DATA_FILE = 'data.json'
-try:
-    if DATA_DIR and os.path.isdir(DATA_DIR):
-        test_file = os.path.join(DATA_DIR, 'data.json')
-        with open(test_file, 'a', encoding='utf-8'):
-            pass
-        DATA_FILE = test_file
-except Exception as e:
-    print('[WARN] Cannot use DATA_DIR, using local file:', e, flush=True)
 
 SITE_URL = 'https://cctvmos.ru'
 PHONE = '+7 (995) 655-04-65'
@@ -75,6 +62,9 @@ def api_request(method, path, params=None, body=None):
         'Authorization': BOT_TOKEN,
         'Content-Type': 'application/json',
     }
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
     try:
         log('API CALL ' + method + ' ' + path + ' params=' + json.dumps(params or {}, ensure_ascii=False))
         if method == 'GET':
@@ -129,6 +119,20 @@ def btn(text, payload=None, url=None, type_='callback'):
     if url:
         b['url'] = url
     return b
+
+
+# ============================================================
+# НОРМАЛИЗАЦИЯ ТЕЛЕФОНА
+# ============================================================
+def normalize_phone(phone):
+    digits = re.sub(r'\D', '', phone or '')
+    if len(digits) == 11 and digits[0] == '8':
+        digits = '7' + digits[1:]
+    if len(digits) == 11 and digits[0] == '7':
+        return '+7 ' + digits[1:4] + ' ' + digits[4:7] + '-' + digits[7:9] + '-' + digits[9:11]
+    if len(digits) == 10:
+        return '+7 ' + digits[0:3] + ' ' + digits[3:6] + '-' + digits[6:8] + '-' + digits[8:10]
+    return phone
 
 
 # ============================================================
@@ -511,10 +515,9 @@ def finalize_lead(draft, user_id, first_name, username, data):
     lead = {
         'number': num,
         'name': draft.get('name', ''),
-        'phone': draft.get('phone', ''),
+        'phone': normalize_phone(draft.get('phone', '')),
         'object': draft.get('object', ''),
         'service': draft.get('service', ''),
-        'source': 'bot',
         'client_name': first_name,
         'client_username': username,
         'user_id': user_id,
@@ -558,19 +561,34 @@ def handle_admin_message(user_id, text, data):
         return
     if text == '/list':
         last = data['leads'][-10:][::-1]
-        out = '📋 Последние заявки:\n\n'
+        if not last:
+            send_message(user_id, 'Заявок нет.', admin_menu_kb())
+            return
+        out = '📋 Последние заявки — нажмите на номер, чтобы открыть:\n\n'
+        rows = []
         for l in last:
-            src = '🌐' if l.get('source') == 'site' else '🤖'
-            out += src + ' №' + l['number'] + ' — ' + l['name'] + '\n🏢 ' + l['object'] + ' · 🔧 ' + l['service'] + '\n📞 ' + l['phone'] + '\n\n'
-        send_message(user_id, out or 'Заявок нет.', admin_menu_kb())
+            out += '№' + l['number'] + ' — ' + l['name'] + '\n🏢 ' + l['object'] + ' · 🔧 ' + l['service'] + '\n📞 ' + l['phone'] + '\n\n'
+            rows.append([btn('№' + l['number'] + ' — ' + l['name'], 'lead:view:' + l['number'])])
+        send_message(user_id, out, make_keyboard(rows))
         return
     if text.startswith('/find '):
         num = text[6:].strip()
         for l in data['leads']:
             if l['number'] == num:
-                src = 'Сайт' if l.get('source') == 'site' else 'Бот'
+                created = l.get('created_at')
+                try:
+                    created_str = time.strftime('%d.%m.%Y %H:%M', time.localtime(created)) if created else '—'
+                except Exception:
+                    created_str = '—'
                 send_message(user_id,
-                             '📋 Заявка №' + l['number'] + ' (' + src + ')\n\n👤 ' + l['name'] + '\n📞 ' + l['phone'] + '\n🏢 ' + l['object'] + '\n🔧 ' + l['service'],
+                             '📋 Заявка №' + l['number'] + '\n\n'
+                             '👤 Имя: ' + l['name'] + '\n'
+                             '📞 Телефон: ' + l['phone'] + '\n'
+                             '🏢 Объект: ' + l['object'] + '\n'
+                             '🔧 Услуга: ' + l['service'] + '\n\n'
+                             '🔗 MAX: @' + (l.get('client_username') or '—') + '\n'
+                             '🆔 User ID: ' + str(l.get('user_id', '')) + '\n'
+                             '📅 Создана: ' + created_str,
                              admin_menu_kb())
                 return
         send_message(user_id, 'Заявка №' + num + ' не найдена.', admin_menu_kb())
@@ -589,9 +607,6 @@ def handle_admin_message(user_id, text, data):
         rows = [[btn(g['emoji'] + ' ' + g['name'], 'rules:grp:' + str(i))] for i, g in enumerate(RULES_GROUPS)]
         send_message(user_id, '📚 Правила FAQ — выберите группу:', make_keyboard(rows))
         return
-
-    # Любое другое сообщение от админа — показываем меню
-    send_message(user_id, '👋 Что нужно сделать?', admin_menu_kb())
 
 
 # ============================================================
@@ -708,6 +723,33 @@ def handle_callback(user_id, payload, data):
                      admin_menu_kb())
         return
 
+    # ---------- Открыть полную заявку ----------
+    if is_admin and payload.startswith('lead:view:'):
+        num = payload[10:]
+        found = None
+        for l in data['leads']:
+            if l['number'] == num:
+                found = l
+                break
+        if not found:
+            send_message(user_id, 'Заявка не найдена.', admin_menu_kb())
+            return
+        created = found.get('created_at')
+        try:
+            created_str = time.strftime('%d.%m.%Y %H:%M', time.localtime(created)) if created else '—'
+        except Exception:
+            created_str = '—'
+        full = ('📋 Заявка №' + found['number'] + '\n\n'
+                '👤 Имя: ' + found['name'] + '\n'
+                '📞 Телефон: ' + found['phone'] + '\n'
+                '🏢 Объект: ' + found['object'] + '\n'
+                '🔧 Услуга: ' + found['service'] + '\n\n'
+                '🔗 MAX: @' + (found.get('client_username') or '—') + '\n'
+                '🆔 User ID: ' + str(found.get('user_id', '')) + '\n'
+                '📅 Создана: ' + created_str)
+        send_message(user_id, full, admin_menu_kb())
+        return
+
     draft = data['drafts'].get(str(user_id))
     if not draft:
         return
@@ -815,7 +857,7 @@ def site_lead():
         log('SITE LEAD RAW: ' + raw[:1500])
 
         secret = request.headers.get('X-Site-Token', '')
-        if SITE_TOKEN and secret != SITE_TOKEN:
+        if WEBHOOK_SECRET and secret != WEBHOOK_SECRET:
             log('SITE LEAD SECRET MISMATCH')
             return jsonify({'ok': False}), 403
 
@@ -830,42 +872,6 @@ def site_lead():
         if not text:
             log('SITE LEAD: empty text')
             return jsonify({'ok': True})
-
-        # Сохраняем заявку с сайта в общий список
-        now = time.localtime()
-        num = '{:02d}{:02d}-{:02d}{:02d}'.format(now.tm_mday, now.tm_mon, now.tm_hour, now.tm_min)
-
-        name = ''
-        phone = ''
-        obj = ''
-        service = ''
-        for line in text.split('\n'):
-            line = line.strip()
-            if line.startswith('Имя:'):
-                name = line[4:].strip()
-            elif line.startswith('Телефон:'):
-                phone = line[8:].strip()
-            elif line.startswith('Объект:'):
-                obj = line[7:].strip()
-            elif line.startswith('Что интересует:'):
-                service = line[16:].strip()
-            elif line.startswith('Услуга:') and not service:
-                service = line[7:].strip()
-
-        lead = {
-            'number': num,
-            'name': name or 'Заявка с сайта',
-            'phone': phone,
-            'object': obj,
-            'service': service,
-            'source': 'site',
-            'created_at': int(time.time()),
-        }
-        data = load_data()
-        data['leads'].append(lead)
-        data['leads'] = data['leads'][-500:]
-        save_data(data)
-        log('SITE LEAD SAVED: №' + num + ' ' + name)
 
         for admin_id in ADMIN_IDS:
             send_message(admin_id, text)
